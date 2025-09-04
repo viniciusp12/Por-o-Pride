@@ -11,7 +11,7 @@ import regex as re
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import sys
-import math # Adicionado para cálculo de entropia
+import math
 
 # --- VARIÁVEIS GLOBAIS E CONFIGURAÇÃO ---
 username = os.getlogin()
@@ -39,7 +39,6 @@ def calculate_entropy(data: bytes) -> float:
         return 0
     
     entropy = 0
-    # Usamos um dicionário para contar a frequência de cada byte, que é mais eficiente.
     freq_dict = {}
     for byte in data:
         freq_dict[byte] = freq_dict.get(byte, 0) + 1
@@ -68,19 +67,16 @@ def encerrar_proctree():
     active_threat = True
     print("\n" + "🚨 AMEAÇA DETECTADA! ACIONANDO PROTOCOLO DE MITIGAÇÃO! 🚨")
     pids_to_kill = ""
-    # Mata os processos mais recentes primeiro
     for pid in reversed(ult_processos):
         if psutil.pid_exists(pid) and pid != os.getpid():
             pids_to_kill += f"/PID {pid} "
     
     if pids_to_kill:
         print(f"Encerrando processos suspeitos (PIDs): {pids_to_kill.replace('/PID', '').strip()}")
-        # O comando /F força o encerramento e /T encerra processos filhos.
         subprocess.run(f"taskkill {pids_to_kill}/F /T", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     
     ult_processos.clear()
     print("Processos suspeitos encerrados. Recomenda-se reiniciar o sistema.")
-    # Um tempo de espera para evitar falsos positivos repetidos imediatamente.
     time.sleep(10) 
     active_threat = False
 
@@ -88,8 +84,6 @@ def avaliar_heuristica():
     global change_type
     criados, modificados, movidos, deletados, honeypot = change_type
 
-    # A modificação em arquivo honeypot agora é tratada diretamente nos eventos
-    # mas mantemos aqui como uma camada extra, caso necessário.
     if honeypot > 0:
         print("\nHeurística: Modificação em arquivo honeypot (isca) detectada!")
         return True
@@ -111,19 +105,23 @@ def novos_processos():
     now = time.time()
     current_pids = []
     
-    # O iterador já busca o 'cmdline' para nós
     for process in psutil.process_iter(['pid', 'create_time', 'cmdline']):
         try:
-            # CORREÇÃO APLICADA AQUI: Removido os parênteses ()
-            cmdline = " ".join(process.info['cmdline']).lower()
+            cmdline_list = process.info['cmdline']
             
-            # NOVO: Monitoramento de comandos de exclusão de Cópias de Sombra
+            # Verificação de segurança para garantir que cmdline_list é iterável
+            if cmdline_list:
+                cmdline = " ".join(cmdline_list).lower()
+            else:
+                cmdline = ""
+
+            # Monitoramento de comandos de exclusão de Cópias de Sombra
             if "vssadmin" in cmdline and "delete" in cmdline and "shadows" in cmdline:
                 print(f"\n🚨 ALERTA MÁXIMO! Tentativa de exclusão de Cópias de Sombra detectada! (PID: {process.info['pid']})")
                 if process.info['pid'] not in ult_processos:
-                    ult_processos.append(process.info['pid']) # Garante que o processo malicioso seja morto
+                    ult_processos.append(process.info['pid'])
                 encerrar_proctree()
-                return # Interrompe a função para agir imediatamente
+                return
 
             # Monitora processos criados nos últimos 2 minutos
             if (now - process.info['create_time']) < 120:
@@ -132,7 +130,6 @@ def novos_processos():
                 current_pids.append(process.info['pid'])
 
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-            # Adicionado ZombieProcess para maior robustez em alguns sistemas
             continue
             
     # Limpa a lista de processos que não existem mais
@@ -147,8 +144,6 @@ class MonitorFolder(FileSystemEventHandler):
     def on_any_event(self, event):
         global last_activity_time
         last_activity_time = time.time()
-        # O antigo honeypot de pasta "porao" foi substituído pelos Canary Files,
-        # mas a lógica pode ser mantida se desejado.
         if avaliar_heuristica():
             encerrar_proctree()
     
@@ -178,21 +173,20 @@ class MonitorFolder(FileSystemEventHandler):
         change_type[1] += 1
         
         try:
-            # NOVO: Verificação de Canary File (isca) - ALTA PRIORIDADE
+            # Verificação de Canary File (isca) - ALTA PRIORIDADE
             if event.src_path in CANARY_FILES:
                 print(f"\n🚨 ALERTA MÁXIMO! Arquivo isca '{os.path.basename(event.src_path)}' foi modificado!")
                 encerrar_proctree()
-                return # Ação imediata
+                return
 
-            # NOVO: Análise de Entropia para detectar criptografia
+            # Análise de Entropia para detectar criptografia
             with open(event.src_path, "rb") as f:
                 data = f.read()
             entropy = calculate_entropy(data)
-            # Um limiar de 7.2 é um forte indicador de dados criptografados (escala 0-8)
             if entropy > 7.2:
                 print(f"\n🚨 ALERTA DE ENTROPIA! Arquivo '{event.src_path}' parece ter sido criptografado (Entropia: {entropy:.2f})")
                 encerrar_proctree()
-                return # Ação imediata
+                return
 
             if check_ransom_note_filename(event.src_path):
                 encerrar_proctree()
@@ -200,22 +194,19 @@ class MonitorFolder(FileSystemEventHandler):
             if self.yara_scanner.scan_file(event.src_path):
                 encerrar_proctree()
         except (IOError, PermissionError):
-            # Ignora erros de leitura (arquivo pode estar bloqueado ou ter sido deletado)
             pass
         except Exception as e:
             print(f"\n[Aviso] Ocorreu um erro durante a análise do arquivo modificado: {event.src_path}. Erro: {e}")
 
     def on_moved(self, event):
         change_type[2] += 1
-        # NOVO: Verificação de Canary File também em eventos de renomeação
         if event.src_path in CANARY_FILES or event.dest_path in CANARY_FILES:
             print(f"\n🚨 ALERTA MÁXIMO! Arquivo isca '{os.path.basename(event.src_path)}' foi movido/renomeado!")
             encerrar_proctree()
-            return # Ação imediata
+            return
 
 # --- EXECUÇÃO PRINCIPAL ---
 if __name__ == "__main__":
-    # Verifica se os arquivos isca existem e cria se necessário
     print("Verificando arquivos isca (Canary Files)...")
     for f in CANARY_FILES:
         if not os.path.exists(f):
@@ -225,7 +216,6 @@ if __name__ == "__main__":
                 print(f" -> Criado arquivo isca: {f}")
             except Exception as e:
                 print(f" -> Erro ao criar arquivo isca {f}: {e}")
-
 
     scanner = YaraScanner()
     if scanner.rules is None:
@@ -264,7 +254,6 @@ if __name__ == "__main__":
             
             novos_processos()
             
-            # Reseta os contadores da heurística se não houver atividade por 15 segundos
             if time.time() - last_activity_time > 15:
                 change_type = [0, 0, 0, 0, 0]
 
