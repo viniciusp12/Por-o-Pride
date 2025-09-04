@@ -15,21 +15,15 @@ import sys
 
 # --- VARIÁVEIS GLOBAIS ---
 username = os.getlogin()
-ult_processos = []  # Guarda PIDs de processos criados recentemente
+ult_processos = []
 change_type = [0, 0, 0, 0, 0]
-# [0] - arquivos_criados, [1] - arquivos_mods, [2] - arquivos_movs, [3] - arquivos_delets, [4] - arquivos_honeypot_editados
 last_activity_time = time.time()
-active_threat = False # Flag para evitar múltiplas execuções da mitigação
+active_threat = False
 
 # --- FUNÇÕES DE DETECÇÃO E PROTEÇÃO ---
 
 def check_ransom_note_filename(file_path: str) -> bool:
-    """
-    Verifica se o nome do arquivo corresponde a padrões de notas de resgate de ransomware.
-    Esta função assume a lógica que antes estava na regra YARA.
-    """
     filename = os.path.basename(file_path)
-    # Expressão regular para encontrar nomes como 'DECRYPT_INSTRUCTIONS.txt', 'HOW_TO_RECOVER_FILES.html', etc.
     pattern = re.compile(r'((DECRYPT|RECOVER|RESTORE|HELP|INSTRUCTIONS).*\.(txt|html|hta))|restore_files_.*\.txt', re.IGNORECASE)
     if pattern.match(filename):
         print(f"\n🚨 AMEAÇA DETECTADA (NOME DE ARQUIVO)! Arquivo suspeito: '{filename}'")
@@ -39,7 +33,7 @@ def check_ransom_note_filename(file_path: str) -> bool:
 def encerrar_proctree():
     global ult_processos, active_threat
     if active_threat:
-        return # Se a mitigação já está em andamento, não faz nada
+        return
     
     active_threat = True
     print("\n" + "🚨 AMEAÇA DETECTADA! ACIONANDO PROTOCOLO DE MITIGAÇÃO! 🚨")
@@ -54,7 +48,7 @@ def encerrar_proctree():
     
     ult_processos.clear()
     print("Processos encerrados. O sistema pode precisar de reinicialização.")
-    time.sleep(10) # Pausa para evitar re-acionamento imediato
+    time.sleep(10)
     active_threat = False
 
 def avaliar_heuristica():
@@ -83,13 +77,12 @@ def novos_processos():
     current_pids = []
     for process in psutil.process_iter(['pid', 'create_time']):
         try:
-            if (now - process.info['create_time']) < 120: # Checa processos criados nos últimos 2 minutos
+            if (now - process.info['create_time']) < 120:
                 if process.info['pid'] not in ult_processos:
                     ult_processos.append(process.info['pid'])
                 current_pids.append(process.info['pid'])
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
-    # Limpa PIDs de processos que já foram encerrados
     ult_processos = [pid for pid in ult_processos if pid in current_pids]
 
 # --- CLASSE DE MONITORAMENTO ---
@@ -110,19 +103,21 @@ class MonitorFolder(FileSystemEventHandler):
         if event.is_directory: return
         change_type[0] += 1
         
-        # Verificando o nome do arquivo
-        if check_ransom_note_filename(event.src_path):
-            encerrar_proctree()
-        
-        # Verificando o conteúdo do arquivo
-        if self.yara_scanner.scan_file(event.src_path):
-            encerrar_proctree()
-        
-        # Verificando o hash de novos executáveis
-        if extrair_extensao(event.src_path):
-            detector = DetectorMalware(event.src_path)
-            if detector.is_malware():
+        # FORTALECIDO: Adicionado try...except para resiliência
+        try:
+            if check_ransom_note_filename(event.src_path):
                 encerrar_proctree()
+            
+            if self.yara_scanner.scan_file(event.src_path):
+                encerrar_proctree()
+            
+            if extrair_extensao(event.src_path):
+                detector = DetectorMalware(event.src_path)
+                if detector.is_malware():
+                    encerrar_proctree()
+        except Exception as e:
+            print(f"\n[Aviso] Ocorreu um erro durante a análise do arquivo: {event.src_path}. Erro: {e}")
+
 
     def on_deleted(self, event):
         change_type[3] += 1
@@ -131,13 +126,15 @@ class MonitorFolder(FileSystemEventHandler):
         if event.is_directory: return
         change_type[1] += 1
         
-        # Verificando o nome do arquivo
-        if check_ransom_note_filename(event.src_path):
-            encerrar_proctree()
-        
-        # Verificando o conteúdo do arquivo
-        if self.yara_scanner.scan_file(event.src_path):
-            encerrar_proctree()
+        # FORTALECIDO: Adicionado try...except para resiliência
+        try:
+            if check_ransom_note_filename(event.src_path):
+                encerrar_proctree()
+                
+            if self.yara_scanner.scan_file(event.src_path):
+                encerrar_proctree()
+        except Exception as e:
+            print(f"\n[Aviso] Ocorreu um erro durante a análise do arquivo: {event.src_path}. Erro: {e}")
 
     def on_moved(self, event):
         change_type[2] += 1
@@ -181,7 +178,6 @@ if __name__ == "__main__":
             spinner_index = (spinner_index + 1) % len(spinner_states)
             time.sleep(0.5) 
             novos_processos()
-            # Reseta os contadores se não houver atividade por 15 segundos
             if time.time() - last_activity_time > 15:
                 change_type = [0, 0, 0, 0, 0]
     except KeyboardInterrupt:

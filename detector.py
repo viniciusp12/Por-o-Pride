@@ -16,7 +16,7 @@ class Hash:
                 for x in iter(lambda: file.read(4094), b""):
                     sha256.update(x)
             return sha256.hexdigest()
-        except FileNotFoundError:
+        except (FileNotFoundError, PermissionError):
             return None
 
 class ColetaDados(Hash):
@@ -27,7 +27,6 @@ class ColetaDados(Hash):
         self.dataBase_Search()
         
     def dataBase_Search(self):
-        errors = ["illegal_hash", "hash_not_found"]
         file_hash = self.gerar_Hash()
         if not file_hash:
             return
@@ -38,27 +37,23 @@ class ColetaDados(Hash):
         }
         
         try:
-            r = requests.post(url=self.url, data=data).json()
-            if r.get("query_status") not in errors:
-                self.malware_info["signature"] = r["data"][0]["signature"]
-                self.malware_info["sha256"] = r["data"][0]["sha256_hash"]
+            r = requests.post(url=self.url, data=data, timeout=5).json()
+            # CORREÇÃO PRINCIPAL:
+            # Agora verificamos se o status é 'ok' E se a chave 'data' realmente existe.
+            if r.get("query_status") == 'ok' and r.get('data'):
+                self.malware_info["signature"] = r["data"][0].get("signature", "N/A")
+                self.malware_info["sha256"] = r["data"][0].get("sha256_hash", "N/A")
                 self.malware_info["locate"] = self.last_file
                 self.malware_detected = True
-        except requests.RequestException:
-            # Falha na conexão com a internet, ignora a verificação
-            pass
+        except (requests.RequestException, KeyError):
+            # Se a API falhar ou a resposta for malformada, simplesmente ignoramos.
+            self.malware_detected = False
 
 class DetectorMalware:
     def __init__(self, last_file: str):
         self.coleta = ColetaDados(last_file)
 
     def is_malware(self) -> bool:
-        """
-        Verifica se o arquivo foi identificado como malware.
-
-        Returns:
-            bool: True se for malware, False caso contrário.
-        """
         if self.coleta.malware_detected:
             print(f'\n🚨 MALWARE DETECTADO (HASH)!')
             print(f'{"-"*20}')
