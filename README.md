@@ -4,3 +4,4 @@
 
 <h2>Como Executar</h2>
 <code>sudo python3 porao.py</code>
+<code>pip install watchdog psutil requests regex yara-python</code>
