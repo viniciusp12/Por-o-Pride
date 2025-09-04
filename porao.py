@@ -111,13 +111,17 @@ def novos_processos():
     now = time.time()
     current_pids = []
     
+    # O iterador já busca o 'cmdline' para nós
     for process in psutil.process_iter(['pid', 'create_time', 'cmdline']):
         try:
+            # CORREÇÃO APLICADA AQUI: Removido os parênteses ()
+            cmdline = " ".join(process.info['cmdline']).lower()
+            
             # NOVO: Monitoramento de comandos de exclusão de Cópias de Sombra
-            cmdline = " ".join(process.info['cmdline']()).lower()
             if "vssadmin" in cmdline and "delete" in cmdline and "shadows" in cmdline:
                 print(f"\n🚨 ALERTA MÁXIMO! Tentativa de exclusão de Cópias de Sombra detectada! (PID: {process.info['pid']})")
-                ult_processos.append(process.info['pid']) # Garante que o processo malicioso seja morto
+                if process.info['pid'] not in ult_processos:
+                    ult_processos.append(process.info['pid']) # Garante que o processo malicioso seja morto
                 encerrar_proctree()
                 return # Interrompe a função para agir imediatamente
 
@@ -127,7 +131,8 @@ def novos_processos():
                     ult_processos.append(process.info['pid'])
                 current_pids.append(process.info['pid'])
 
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            # Adicionado ZombieProcess para maior robustez em alguns sistemas
             continue
             
     # Limpa a lista de processos que não existem mais
