@@ -13,12 +13,23 @@ from watchdog.events import FileSystemEventHandler
 import RegistroAdd as registry
 import sys
 
-# --- VARIÁVEIS GLOBAIS ---
+# --- VARIÁVEIS GLOBAIS E CONFIGURAÇÕES ---
 username = os.getlogin()
 ult_processos = []
 change_type = [0, 0, 0, 0, 0]
 last_activity_time = time.time()
 active_threat = False
+
+# NOVO: Lista de exclusão para pastas seguras e com alta atividade.
+# Isso reduz falsos positivos e melhora a performance.
+EXCLUDED_PATHS = [
+    os.path.join("C:\\", "Windows"),
+    os.path.join("C:\\", "Program Files"),
+    os.path.join("C:\\", "Program Files (x86)"),
+    os.path.join("C:\\", "$Recycle.Bin"),
+    # Adicionar o próprio diretório do script para evitar que ele se monitore
+    os.path.abspath(os.path.dirname(__file__)) 
+]
 
 # --- FUNÇÕES DE DETECÇÃO E PROTEÇÃO ---
 
@@ -93,6 +104,12 @@ class MonitorFolder(FileSystemEventHandler):
 
     def on_any_event(self, event):
         global last_activity_time
+        
+        # MELHORIA: Ignora eventos em pastas excluídas
+        for excluded_path in EXCLUDED_PATHS:
+            if event.src_path.startswith(excluded_path):
+                return
+
         last_activity_time = time.time()
         if "porao" in event.src_path:
             change_type[4] += 1
@@ -103,7 +120,6 @@ class MonitorFolder(FileSystemEventHandler):
         if event.is_directory: return
         change_type[0] += 1
         
-        # FORTALECIDO: Adicionado try...except para resiliência
         try:
             if check_ransom_note_filename(event.src_path):
                 encerrar_proctree()
@@ -118,7 +134,6 @@ class MonitorFolder(FileSystemEventHandler):
         except Exception as e:
             print(f"\n[Aviso] Ocorreu um erro durante a análise do arquivo: {event.src_path}. Erro: {e}")
 
-
     def on_deleted(self, event):
         change_type[3] += 1
 
@@ -126,7 +141,6 @@ class MonitorFolder(FileSystemEventHandler):
         if event.is_directory: return
         change_type[1] += 1
         
-        # FORTALECIDO: Adicionado try...except para resiliência
         try:
             if check_ransom_note_filename(event.src_path):
                 encerrar_proctree()
@@ -146,24 +160,23 @@ if __name__ == "__main__":
         print("Não foi possível iniciar o monitoramento sem as regras YARA.")
         exit()
 
-    home_dir = os.path.expanduser('~')
-    paths_to_watch = [
-        os.path.join(home_dir, 'Downloads'),
-        os.path.join(home_dir, 'Documents'),
-        os.path.join(home_dir, 'Desktop'),
-        os.path.join(home_dir, 'Pictures'),
-    ]
+    # ALTERADO: Agora monitoramos a raiz C:\ de forma inteligente
+    paths_to_watch = ["C:\\"]
 
     event_handler = MonitorFolder(yara_scanner=scanner)
     observer = Observer()
     
-    print("Iniciando monitoramento...")
+    print("Iniciando monitoramento robusto do sistema...")
+    print("Pastas excluídas do monitoramento:")
+    for path in EXCLUDED_PATHS:
+        print(f" -> {path}")
+
     for path in paths_to_watch:
         if os.path.exists(path):
             observer.schedule(event_handler, path=path, recursive=True)
-            print(f" -> Monitorando: {path}")
+            print(f"\nMonitorando: {path}")
         else:
-            print(f" -> Aviso: O diretório '{path}' não existe e não será monitorado.")
+            print(f"\n[ERRO] O diretório '{path}' não existe e não será monitorado.")
 
     observer.start()
     
