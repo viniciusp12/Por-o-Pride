@@ -3,8 +3,8 @@
 import yara
 import os
 
-# CORRIGIDO: A regra problemática 'Ransomware_Note_Filenames' foi removida.
-# Deixamos apenas regras que analisam o CONTEÚDO do arquivo, o que é compatível com todas as versões do YARA.
+# Versão final e simplificada das regras YARA.
+# Focada apenas no conteúdo do arquivo para garantir compatibilidade.
 YARA_RULES = r"""
 rule WannaCry_Strings {
     meta:
@@ -45,6 +45,7 @@ class YaraScanner:
                 print(f"🚨 AMEAÇA YARA DETECTADA (CONTEÚDO)! Arquivo: '{file_path}'. Regra(s): {[match.rule for match in matches]}")
                 return True
         except yara.Error:
+            # Pode ocorrer um erro se o arquivo for bloqueado, por isso retornamos False.
             return False
         
         return False
