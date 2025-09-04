@@ -1,6 +1,5 @@
 # porao.py
 
-# MODIFICADO: Importa o novo scanner YARA e remove a importação do 'comportamento'
 from detector import DetectorMalware
 from yara_scanner import YaraScanner
 import os
@@ -12,23 +11,25 @@ import regex as re
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import RegistroAdd as registry
+import sys # ADICIONADO: Para controlar a saída do console
 
 # --- VARIÁVEIS GLOBAIS ---
 username = os.getlogin()
-ult_processos = []  # Guarda PIDs de processos criados recentemente
+ult_processos = []
 change_type = [0, 0, 0, 0, 0]
-# [0] - arquivos_criados, [1] - arquivos_mods, [2] - arquivos_movs, [3] - arquivos_delets, [4] - arquivos_honeypot_editados
 last_activity_time = time.time()
-active_threat = False # Flag para evitar múltiplas execuções da mitigação
+active_threat = False
 
 # --- FUNÇÕES DE MITIGAÇÃO E PROTEÇÃO ---
+# ... (Todo o conteúdo anterior das funções permanece o mesmo) ...
 def encerrar_proctree():
     global ult_processos, active_threat
     if active_threat:
-        return # Se a mitigação já está em andamento, não faz nada
+        return
     
     active_threat = True
-    print("🚨 AMEAÇA DETECTADA! ACIONANDO PROTOCOLO DE MITIGAÇÃO! 🚨")
+    # Limpa a linha do spinner antes de imprimir a mensagem de ameaça
+    print("\n" + "🚨 AMEAÇA DETECTADA! ACIONANDO PROTOCOLO DE MITIGAÇÃO! 🚨")
     pids_to_kill = ""
     for pid in reversed(ult_processos):
         if psutil.pid_exists(pid) and pid != os.getpid():
@@ -40,30 +41,21 @@ def encerrar_proctree():
     
     ult_processos.clear()
     print("Processos encerrados. O sistema pode precisar de reinicialização.")
-    # Poderia adicionar outras ações aqui, como desconectar a rede.
-    time.sleep(10) # Pausa para evitar re-acionamento imediato
+    time.sleep(10)
     active_threat = False
 
-# NOVO: Função de análise heurística que substitui o modelo de ML
 def avaliar_heuristica():
     global change_type
     criados, modificados, movidos, deletados, honeypot = change_type
-
-    # Regra 1: Atividade de honeypot é um alerta máximo imediato
     if honeypot > 0:
-        print("Heurística: Modificação em arquivo honeypot detectada!")
+        print("\nHeurística: Modificação em arquivo honeypot detectada!")
         return True
-
-    # Regra 2: Atividade de modificação em massa (comportamento clássico de ransomware)
     if modificados > 30 and criados > 10:
-        print("Heurística: Alto volume de modificação e criação de arquivos!")
+        print("\nHeurística: Alto volume de modificação e criação de arquivos!")
         return True
-
-    # Regra 3: Atividade de exclusão em massa (pode indicar tentativa de apagar originais)
     if deletados > 50:
-        print("Heurística: Alto volume de exclusão de arquivos!")
+        print("\nHeurística: Alto volume de exclusão de arquivos!")
         return True
-    
     return False
 
 def extrair_extensao(file: str):
@@ -72,29 +64,23 @@ def extrair_extensao(file: str):
     return file_extension.lower() in extensions
 
 def start_protection():
-    # ... (O conteúdo desta função pode permanecer o mesmo)
-    # Recomendo revisar a parte de renomear vssadmin.exe se causar problemas
-    pass # Removido para simplificar, mas a lógica original é válida
+    pass
 
 def honeypot():
-    # ... (O conteúdo desta função permanece o mesmo)
-    pass # Removido para simplificar
+    pass
 
 def shadow_copy():
-    # ... (O conteúdo desta função permanece o mesmo)
-    pass # Removido para simplificar
+    pass
 
 def novos_processos():
     global ult_processos
     now = time.time()
     current_pids = []
     for process in psutil.process_iter(['pid', 'create_time']):
-        if (now - process.info['create_time']) < 120: # Aumentado para 2 minutos
+        if (now - process.info['create_time']) < 120:
             if process.info['pid'] not in ult_processos:
                 ult_processos.append(process.info['pid'])
             current_pids.append(process.info['pid'])
-    
-    # Limpa PIDs de processos que já foram encerrados
     ult_processos = [pid for pid in ult_processos if pid in current_pids]
 
 # --- CLASSE DE MONITORAMENTO ---
@@ -108,20 +94,14 @@ class MonitorFolder(FileSystemEventHandler):
         last_activity_time = time.time()
         if "porao" in event.src_path:
             change_type[4] += 1
-        
-        # Avaliação heurística a cada evento
         if avaliar_heuristica():
             encerrar_proctree()
     
     def on_created(self, event):
         if event.is_directory: return
         change_type[0] += 1
-        
-        # Escaneamento YARA em novos arquivos
         if self.yara_scanner.scan_file(event.src_path):
             encerrar_proctree()
-        
-        # Verificação de hash em novos executáveis
         if extrair_extensao(event.src_path):
             detector = DetectorMalware(event.src_path)
             if detector.is_malware():
@@ -133,8 +113,6 @@ class MonitorFolder(FileSystemEventHandler):
     def on_modified(self, event):
         if event.is_directory: return
         change_type[1] += 1
-
-        # Escaneamento YARA em arquivos modificados
         if self.yara_scanner.scan_file(event.src_path):
             encerrar_proctree()
 
@@ -143,18 +121,11 @@ class MonitorFolder(FileSystemEventHandler):
 
 # --- EXECUÇÃO PRINCIPAL ---
 if __name__ == "__main__":
-    # registry.AdicionarRegistro(name='PoraoRansomwareDetect') # Descomente para produção
-    # start_protection()
-    # shadow_copy()
-    # honeypot()
-
-    # NOVO: Instancia o scanner YARA
     scanner = YaraScanner()
     if scanner.rules is None:
         print("Não foi possível iniciar o monitoramento sem as regras YARA.")
         exit()
 
-    # MODIFICADO: Lista de pastas críticas a serem monitoradas
     home_dir = os.path.expanduser('~')
     paths_to_watch = [
         os.path.join(home_dir, 'Downloads'),
@@ -176,17 +147,30 @@ if __name__ == "__main__":
 
     observer.start()
     
+    # ADICIONADO: Lógica do "spinner" de atividade
+    spinner_states = ['-', '\\', '|', '/']
+    spinner_index = 0
+    
     try:
         while True:
-            time.sleep(5)
+            # ADICIONADO: Lógica para exibir o retorno de atividade
+            spinner_char = spinner_states[spinner_index]
+            # O `\r` no final faz o cursor voltar ao início da linha, escrevendo por cima
+            sys.stdout.write(f"\rMonitorando ativamente... {spinner_char}")
+            sys.stdout.flush() # Força a exibição imediata
+            spinner_index = (spinner_index + 1) % len(spinner_states)
+
+            # MODIFICADO: Diminuído o tempo de espera para a animação ficar mais fluida
+            time.sleep(0.5) 
+            
             novos_processos()
             
-            # Reseta os contadores se não houver atividade por 15 segundos
             if time.time() - last_activity_time > 15:
                 change_type = [0, 0, 0, 0, 0]
                 
     except KeyboardInterrupt:
-        print("\nMonitoramento encerrado pelo usuário.")
+        # ADICIONADO: Imprime em uma nova linha para não sobrescrever a mensagem final
+        print("\nMonitoramento encerrado pelo usuário.") 
         observer.stop()
     
     observer.join()
