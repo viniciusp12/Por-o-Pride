@@ -3,24 +3,17 @@
 import yara
 import os
 
-# Regras YARA básicas para detectar ransomwares conhecidos.
-# Em um projeto real, o ideal é carregar estas regras de um arquivo .yar
-# e usar um conjunto de regras mais completo de fontes como a comunidade open-source.
-YARA_RULES = """
+# CORRIGIDO: Usando r""" (raw string) para evitar avisos de sintaxe com '\'.
+# E a regra Ransomware_Note_Filenames foi completamente reescrita para ser funcional.
+YARA_RULES = r"""
 rule Ransomware_Note_Filenames {
     meta:
-        description = "Detecta nomes comuns de arquivos de nota de resgate de ransomware"
+        description = "Detecta nomes comuns de arquivos de nota de resgate de ransomware pelo nome do arquivo"
         author = "Parceiro de Programacao"
-    strings:
-        $ransom_note1 = /DECRYPT_INSTRUCTIONS\.(txt|html)/
-        $ransom_note2 = /RECOVERY_FILES\.txt/
-        $ransom_note3 = /HELP_DECRYPT\.txt/
-        $ransom_note4 = /HOW_TO_DECRYPT_FILES\.txt/
-        $ransom_note5 = /restore_files_.*\.txt/
     condition:
-        // A regra é acionada se o NOME DO ARQUIVO corresponder a um dos padrões
-        (for any of them : ( uint32(0) == uint32be(0x23212F62) or filesize < 10KB and @ransom_note1[0] == 0)) or
-        filename matches /(DECRYPT|RECOVER|RESTORE|HELP)_/i
+        // A regra agora usa a keyword 'filename' para testar uma expressão regular contra o nome do arquivo.
+        // Esta é a forma correta de fazer essa verificação em YARA.
+        filename matches /((DECRYPT|RECOVER|RESTORE|HELP|INSTRUCTIONS).*\.(txt|html|hta))|restore_files_.*\.txt/i
 }
 
 rule WannaCry_Strings {
@@ -64,12 +57,12 @@ class YaraScanner:
             return False
         
         try:
+            # CORRIGIDO: O escaneamento do nome do arquivo acontece aqui, dentro do 'match'
             matches = self.rules.match(filepath=file_path)
             if matches:
                 print(f"🚨 AMEAÇA YARA DETECTADA! Arquivo: '{file_path}'. Regra(s): {[match.rule for match in matches]}")
                 return True
         except yara.Error:
-            # Pode ocorrer um erro se o arquivo for bloqueado ou excluído durante o escaneamento
             return False
         
         return False
