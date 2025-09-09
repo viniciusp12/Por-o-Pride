@@ -12,86 +12,111 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import sys
 import math
+import zipfile
 
 # --- VARIÁVEIS GLOBAIS E CONFIGURAÇÃO ---
 username = os.getlogin()
 ult_processos = []
-change_type = [0, 0, 0, 0, 0] # [criados, modificados, movidos, deletados, honeypot]
 last_activity_time = time.time()
 active_threat = False
 
-# --- !! IMPORTANTE: CONFIGURE SEUS ARQUIVOS ISCA AQUI !! ---
-# Crie estes arquivos vazios nos locais indicados para que sirvam de alarme.
-# Exemplo: Crie um arquivo vazio chamado 'dados_bancarios.xlsx' dentro de 'Documentos'.
+# ***** SISTEMA DE SNAPSHOT *****
+SNAPSHOT_ARQUIVOS = {} # Dicionário para guardar o estado dos arquivos
+
 HOME_DIR = os.path.expanduser('~')
 CANARY_FILES = {
     os.path.join(HOME_DIR, 'Documents', 'dados_bancarios.xlsx'),
-    os.path.join(HOME_DIR, 'Documents', 'senhas_importantes.txt'),
-    os.path.join(HOME_DIR, 'Pictures', 'fotos_viagem_secreta.zip'),
     os.path.join(HOME_DIR, 'Desktop', 'trabalho_faculdade.docx')
 }
+QUARANTINE_DIR = os.path.join(HOME_DIR, "Quarantine")
+QUARANTINE_PASS = b"infected"
 
-# --- FUNÇÕES DE DETECÇÃO E PROTEÇÃO ---
+FORBIDDEN_EXEC_PATHS = [
+    os.environ.get("TEMP", "").lower(),
+    os.path.join(os.environ.get("APPDATA", ""), "Local", "Temp").lower()
+]
+FORBIDDEN_EXEC_PATHS = [path for path in FORBIDDEN_EXEC_PATHS if path]
 
-def calculate_entropy(data: bytes) -> float:
-    """Calcula a Entropia de Shannon para um conjunto de dados."""
-    if not data:
-        return 0
-    
-    entropy = 0
-    freq_dict = {}
-    for byte in data:
-        freq_dict[byte] = freq_dict.get(byte, 0) + 1
+# --- FUNÇÕES DE DETECÇÃO, RESPOSTA E SNAPSHOT ---
 
-    data_len = len(data)
-    for count in freq_dict.values():
-        p_x = count / data_len
-        if p_x > 0:
-            entropy -= p_x * math.log2(p_x)
-            
-    return entropy
+def criar_snapshot_arquivos(paths_to_watch):
+    global SNAPSHOT_ARQUIVOS
+    print("\n[*] Criando novo snapshot do sistema de arquivos...")
+    temp_snapshot = {}
+    for path in paths_to_watch:
+        for root, _, files in os.walk(path):
+            for file in files:
+                try:
+                    file_path = os.path.join(root, file)
+                    temp_snapshot[file_path] = os.path.getmtime(file_path)
+                except (FileNotFoundError, PermissionError):
+                    continue
+    SNAPSHOT_ARQUIVOS = temp_snapshot
+    print(f"[+] Snapshot criado com {len(SNAPSHOT_ARQUIVOS)} arquivos.")
+
+def analisar_diferenca_e_agir(paths_to_watch):
+    global SNAPSHOT_ARQUIVOS
+    print("\n[*] Comparando estado atual com o último snapshot...")
+    arquivos_afetados = 0
+    for path in paths_to_watch:
+        for root, _, files in os.walk(path):
+            for file in files:
+                try:
+                    file_path = os.path.join(root, file)
+                    file_mtime = os.path.getmtime(file_path)
+                    if file_path not in SNAPSHOT_ARQUIVOS:
+                        print(f"[!] Novo arquivo suspeito detectado: {os.path.basename(file_path)}")
+                        colocar_em_quarentena(file_path)
+                        arquivos_afetados += 1
+                    elif file_mtime > SNAPSHOT_ARQUIVOS.get(file_path, 0):
+                        print(f"[!] Arquivo modificado suspeito detectado: {os.path.basename(file_path)}")
+                        colocar_em_quarentena(file_path)
+                        arquivos_afetados += 1
+                except (FileNotFoundError, PermissionError):
+                    continue
+    print(f"[+] Análise de snapshot concluída. {arquivos_afetados} arquivos foram movidos para a quarentena.")
+
+def encerrar_proctree():
+    global ult_processos, active_threat, paths_to_watch_global
+    if active_threat: return
+    active_threat = True
+    print("\n" + "🚨 AMEAÇA DETECTADA! ACIONANDO PROTOCOLO DE MITIGAÇÃO! 🚨")
+    analisar_diferenca_e_agir(paths_to_watch_global)
+    meu_pid = os.getpid()
+    pids_to_kill = ""
+    for pid in reversed(ult_processos):
+        if psutil.pid_exists(pid) and pid != meu_pid:
+            pids_to_kill += f"/PID {pid} "
+    if pids_to_kill:
+        print(f"Encerrando processos suspeitos (PIDs): {pids_to_kill.replace('/PID', '').strip()}")
+        subprocess.run(f"taskkill {pids_to_kill}/F /T", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    ult_processos.clear()
+    print("Processos suspeitos encerrados. O monitoramento continua ativo.")
+    time.sleep(10)
+    criar_snapshot_arquivos(paths_to_watch_global)
+    active_threat = False
+
+def colocar_em_quarentena(file_path: str):
+    if not os.path.exists(file_path) or not os.path.isfile(file_path): return
+    print(f"[*] Movendo para quarentena: {os.path.basename(file_path)}")
+    try:
+        os.makedirs(QUARANTINE_DIR, exist_ok=True)
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        zip_name = f"{os.path.basename(file_path)}_{timestamp}.zip"
+        zip_path = os.path.join(QUARANTINE_DIR, zip_name)
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.setpassword(QUARANTINE_PASS)
+            zf.write(file_path, arcname=os.path.basename(file_path))
+        os.remove(file_path)
+        print(f"[+] Arquivo movido para '{zip_path}' e protegido com senha.")
+    except Exception as e:
+        print(f"[-] Falha ao mover para quarentena: {e}")
 
 def check_ransom_note_filename(file_path: str) -> bool:
     filename = os.path.basename(file_path)
     pattern = re.compile(r'((DECRYPT|RECOVER|RESTORE|HELP|INSTRUCTIONS).*\.(txt|html|hta))|restore_files_.*\.txt', re.IGNORECASE)
     if pattern.match(filename):
-        print(f"\n🚨 AMEAÇA DETECTADA (NOME DE ARQUIVO)! Arquivo suspeito: '{filename}'")
-        return True
-    return False
-
-def encerrar_proctree():
-    global ult_processos, active_threat
-    if active_threat:
-        return
-    
-    active_threat = True
-    print("\n" + "🚨 AMEAÇA DETECTADA! ACIONANDO PROTOCOLO DE MITIGAÇÃO! 🚨")
-    pids_to_kill = ""
-    for pid in reversed(ult_processos):
-        if psutil.pid_exists(pid) and pid != os.getpid():
-            pids_to_kill += f"/PID {pid} "
-    
-    if pids_to_kill:
-        print(f"Encerrando processos suspeitos (PIDs): {pids_to_kill.replace('/PID', '').strip()}")
-        subprocess.run(f"taskkill {pids_to_kill}/F /T", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    
-    ult_processos.clear()
-    print("Processos suspeitos encerrados. Recomenda-se reiniciar o sistema.")
-    time.sleep(10) 
-    active_threat = False
-
-def avaliar_heuristica():
-    global change_type
-    criados, modificados, movidos, deletados, honeypot = change_type
-
-    if honeypot > 0:
-        print("\nHeurística: Modificação em arquivo honeypot (isca) detectada!")
-        return True
-    if modificados > 30 and criados > 10:
-        print("\nHeurística: Alto volume de modificação e criação de arquivos!")
-        return True
-    if deletados > 50:
-        print("\nHeurística: Alto volume de exclusão de arquivos!")
+        print(f"\n🚨 AMEAÇA DETECTADA (NOTA DE RESGATE)! Arquivo: '{filename}'")
         return True
     return False
 
@@ -104,38 +129,30 @@ def novos_processos():
     global ult_processos
     now = time.time()
     current_pids = []
-    
-    for process in psutil.process_iter(['pid', 'create_time', 'cmdline']):
+    for process in psutil.process_iter(['pid', 'create_time', 'cmdline', 'exe']):
         try:
+            exe_path = process.info.get('exe')
+            if exe_path:
+                for forbidden_path in FORBIDDEN_EXEC_PATHS:
+                    if exe_path.lower().startswith(forbidden_path):
+                        print(f"\n🚨 ALERTA PREVENTIVO! Processo suspeito executando de pasta temporária: {exe_path}")
+                        if process.info['pid'] not in ult_processos: ult_processos.append(process.info['pid'])
+                        encerrar_proctree()
+                        return
             cmdline_list = process.info['cmdline']
-            
-            # Verificação de segurança para garantir que cmdline_list é iterável
-            if cmdline_list:
-                cmdline = " ".join(cmdline_list).lower()
-            else:
-                cmdline = ""
-
-            # Monitoramento de comandos de exclusão de Cópias de Sombra
+            cmdline = " ".join(cmdline_list).lower() if cmdline_list else ""
             if "vssadmin" in cmdline and "delete" in cmdline and "shadows" in cmdline:
-                print(f"\n🚨 ALERTA MÁXIMO! Tentativa de exclusão de Cópias de Sombra detectada! (PID: {process.info['pid']})")
-                if process.info['pid'] not in ult_processos:
-                    ult_processos.append(process.info['pid'])
+                if process.info['pid'] not in ult_processos: ult_processos.append(process.info['pid'])
                 encerrar_proctree()
                 return
-
-            # Monitora processos criados nos últimos 2 minutos
             if (now - process.info['create_time']) < 120:
-                if process.info['pid'] not in ult_processos:
-                    ult_processos.append(process.info['pid'])
+                if process.info['pid'] not in ult_processos: ult_processos.append(process.info['pid'])
                 current_pids.append(process.info['pid'])
-
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             continue
-            
-    # Limpa a lista de processos que não existem mais
     ult_processos = [pid for pid in ult_processos if pid in current_pids]
 
-# --- CLASSE DE MONITORAMENTO ---
+# ***** REINTRODUZINDO O WATCHDOG COMO GATILHO RÁPIDO *****
 class MonitorFolder(FileSystemEventHandler):
     def __init__(self, yara_scanner: YaraScanner):
         self.yara_scanner = yara_scanner
@@ -144,101 +161,66 @@ class MonitorFolder(FileSystemEventHandler):
     def on_any_event(self, event):
         global last_activity_time
         last_activity_time = time.time()
-        if avaliar_heuristica():
-            encerrar_proctree()
-    
+
     def on_created(self, event):
-        if event.is_directory: return
-        change_type[0] += 1
-        
+        if event.is_directory or active_threat: return
         try:
-            if check_ransom_note_filename(event.src_path):
+            if check_ransom_note_filename(event.src_path) or self.yara_scanner.scan_file(event.src_path):
                 encerrar_proctree()
-            
-            if self.yara_scanner.scan_file(event.src_path):
-                encerrar_proctree()
-            
+                return
             if extrair_extensao(event.src_path):
                 detector = DetectorMalware(event.src_path)
                 if detector.is_malware():
                     encerrar_proctree()
-        except Exception as e:
-            print(f"\n[Aviso] Ocorreu um erro durante a análise do arquivo criado: {event.src_path}. Erro: {e}")
-
-    def on_deleted(self, event):
-        change_type[3] += 1
+        except Exception:
+            pass
 
     def on_modified(self, event):
-        if event.is_directory: return
-        change_type[1] += 1
-        
+        if event.is_directory or active_threat: return
         try:
-            # Verificação de Canary File (isca) - ALTA PRIORIDADE
             if event.src_path in CANARY_FILES:
                 print(f"\n🚨 ALERTA MÁXIMO! Arquivo isca '{os.path.basename(event.src_path)}' foi modificado!")
                 encerrar_proctree()
                 return
-
-            # Análise de Entropia para detectar criptografia
             with open(event.src_path, "rb") as f:
                 data = f.read()
-            entropy = calculate_entropy(data)
-            if entropy > 7.2:
-                print(f"\n🚨 ALERTA DE ENTROPIA! Arquivo '{event.src_path}' parece ter sido criptografado (Entropia: {entropy:.2f})")
+            if calculate_entropy(data) > 7.2:
+                print(f"\n🚨 ALERTA DE ENTROPIA! '{os.path.basename(event.src_path)}' parece criptografado.")
                 encerrar_proctree()
-                return
-
-            if check_ransom_note_filename(event.src_path):
-                encerrar_proctree()
-                
-            if self.yara_scanner.scan_file(event.src_path):
-                encerrar_proctree()
-        except (IOError, PermissionError):
+        except Exception:
             pass
-        except Exception as e:
-            print(f"\n[Aviso] Ocorreu um erro durante a análise do arquivo modificado: {event.src_path}. Erro: {e}")
 
     def on_moved(self, event):
-        change_type[2] += 1
+        if active_threat: return
         if event.src_path in CANARY_FILES or event.dest_path in CANARY_FILES:
             print(f"\n🚨 ALERTA MÁXIMO! Arquivo isca '{os.path.basename(event.src_path)}' foi movido/renomeado!")
             encerrar_proctree()
-            return
 
 # --- EXECUÇÃO PRINCIPAL ---
 if __name__ == "__main__":
-    print("Verificando arquivos isca (Canary Files)...")
-    for f in CANARY_FILES:
-        if not os.path.exists(f):
-            try:
-                pathlib.Path(os.path.dirname(f)).mkdir(parents=True, exist_ok=True)
-                pathlib.Path(f).touch()
-                print(f" -> Criado arquivo isca: {f}")
-            except Exception as e:
-                print(f" -> Erro ao criar arquivo isca {f}: {e}")
+    global paths_to_watch_global
+    
+    paths_to_watch_global = [os.path.join(HOME_DIR, d) for d in ['Downloads', 'Documents', 'Desktop', 'Pictures']]
+    temp_paths = [os.environ.get("TEMP"), os.path.join(os.environ.get("APPDATA", ""), "Local", "Temp")]
+    for path in temp_paths:
+        if path and os.path.exists(path) and path not in paths_to_watch_global:
+            paths_to_watch_global.append(path)
 
+    criar_snapshot_arquivos(paths_to_watch_global)
+    
     scanner = YaraScanner()
-    if scanner.rules is None:
-        print("Não foi possível iniciar o monitoramento sem as regras YARA.")
-        exit()
-
-    paths_to_watch = [
-        os.path.join(HOME_DIR, 'Downloads'),
-        os.path.join(HOME_DIR, 'Documents'),
-        os.path.join(HOME_DIR, 'Desktop'),
-        os.path.join(HOME_DIR, 'Pictures'),
-    ]
-
+    if scanner.rules is None: exit()
+    
     event_handler = MonitorFolder(yara_scanner=scanner)
     observer = Observer()
     
-    print("\nIniciando monitoramento...")
-    for path in paths_to_watch:
+    print("\nIniciando monitoramento híbrido (Processos + Eventos de Arquivo)...")
+    for path in paths_to_watch_global:
         if os.path.exists(path):
             observer.schedule(event_handler, path=path, recursive=True)
             print(f" -> Monitorando: {path}")
         else:
-            print(f" -> Aviso: O diretório '{path}' não existe e não será monitorado.")
+            print(f" -> Aviso: O diretório '{path}' não existe.")
 
     observer.start()
     
@@ -248,19 +230,17 @@ if __name__ == "__main__":
     try:
         while True:
             spinner_char = spinner_states[spinner_index]
-            sys.stdout.write(f"\rMonitorando ativamente... {spinner_char}")
-            sys.stdout.flush()
+            sys.stdout.write(f"\rMonitorando ativamente... {spinner_char}"); sys.stdout.flush()
             spinner_index = (spinner_index + 1) % len(spinner_states)
             
             novos_processos()
             
-            if time.time() - last_activity_time > 15:
-                change_type = [0, 0, 0, 0, 0]
+            if not active_threat and (time.time() - last_activity_time > 20):
+                criar_snapshot_arquivos(paths_to_watch_global)
+                last_activity_time = time.time()
 
-            time.sleep(0.5)
-
+            time.sleep(0.05)
     except KeyboardInterrupt:
-        print("\nMonitoramento encerrado pelo usuário.") 
+        print("\nMonitoramento encerrado pelo usuário.")
         observer.stop()
-    
     observer.join()

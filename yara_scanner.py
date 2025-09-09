@@ -3,31 +3,28 @@
 import yara
 import os
 
-# Versão final e simplificada das regras YARA.
-# Focada apenas no conteúdo do arquivo para garantir compatibilidade.
-YARA_RULES = r"""
-rule WannaCry_Strings {
-    meta:
-        description = "Detecta strings específicas associadas ao WannaCry"
-        author = "Parceiro de Programacao"
-    strings:
-        $s1 = "Wana Decrypt0r" wide
-        $s2 = "wanacryptor" ascii
-        $s3 = "wcry@123" wide
-    condition:
-        any of them
-}
-"""
-
 class YaraScanner:
     def __init__(self):
         """
-        Compila as regras YARA na inicialização.
+        Compila as regras YARA a partir de um arquivo de índice externo.
         """
         try:
-            print("Compilando regras YARA...")
-            self.rules = yara.compile(source=YARA_RULES)
+            # Constrói o caminho para o arquivo de índice de forma dinâmica
+            # Isso garante que funcione, não importa de onde o script seja executado
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            rules_path = os.path.join(base_dir, "rules", "index.yar")
+
+            print("Compilando regras YARA a partir de:", rules_path)
+            
+            if not os.path.exists(rules_path):
+                print(f"Erro: Arquivo de índice YARA não encontrado em '{rules_path}'")
+                print("Por favor, crie a pasta 'rules' e o arquivo 'index.yar' conforme as instruções.")
+                self.rules = None
+                return
+
+            self.rules = yara.compile(filepath=rules_path)
             print("Regras YARA compiladas com sucesso.")
+
         except yara.Error as e:
             print(f"Erro ao compilar regras YARA: {e}")
             self.rules = None
@@ -40,10 +37,17 @@ class YaraScanner:
             return False
         
         try:
-            matches = self.rules.match(filepath=file_path)
+            # Adicionado timeout para evitar que a verificação de arquivos grandes trave o programa
+            matches = self.rules.match(filepath=file_path, timeout=5)
+            
             if matches:
-                print(f"🚨 AMEAÇA YARA DETECTADA (CONTEÚDO)! Arquivo: '{file_path}'. Regra(s): {[match.rule for match in matches]}")
+                # Usamos um set para não mostrar regras duplicadas, caso haja
+                matched_rules = list(set([match.rule for match in matches]))
+                print(f"🚨 AMEAÇA YARA DETECTADA! Arquivo: '{os.path.basename(file_path)}'. Regra(s): {matched_rules}")
                 return True
+        except yara.TimeoutError:
+            print(f"[Aviso] Verificação YARA do arquivo '{os.path.basename(file_path)}' excedeu o tempo limite.")
+            return False
         except yara.Error:
             # Pode ocorrer um erro se o arquivo for bloqueado, por isso retornamos False.
             return False
