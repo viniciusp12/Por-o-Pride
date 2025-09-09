@@ -77,3 +77,4 @@ Isso registrará a ferramenta no **Agendador de Tarefas**, garantindo que o moni
 - A instalação como serviço requer **privilégios de Administrador**.
 - Projeto desenvolvido para **fins educacionais e de defesa cibernética**.
 - O **uso indevido** é de inteira responsabilidade do usuário.
+- 🚫 **É estritamente proibida qualquer forma de venda ou comercialização deste projeto. Ele é de autoria exclusiva do desenvolvedor.**
